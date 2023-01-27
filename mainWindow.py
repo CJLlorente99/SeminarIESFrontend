@@ -175,13 +175,10 @@ class MainWindow(QMainWindow):
 				screw.dataStrain3 = pd.DataFrame()
 				screw.dataTemperature = pd.DataFrame()
 
-				if screw.name == item.text():
-					self.updatePlot(screw)
-		else:
-			self.strain1.setData([0], [0])
-			self.strain2.setData([0], [0])
-			self.strain3.setData([0], [0])
-			self.temperature.setData([0], [0])
+				self.strain1.setData([0], [0])
+				self.strain2.setData([0], [0])
+				self.strain3.setData([0], [0])
+				self.temperature.setData([0], [0])
 		res.to_csv('data.csv')
 
 	def exportAllOnClick(self):
@@ -246,35 +243,39 @@ class MainWindow(QMainWindow):
 			self.temperature.setData(screw.dataTemperature['seconds'].values, screw.dataTemperature['data'].values)
 
 	def digestNewDataStrain1(self, data: bytes, screw: Screw):
+		print('Strain1')
 		value = conversionFromBytes(data)
 		for i in screws:
 			if i.name == screw.name:
 				i.dataStrain1 = pd.concat([i.dataStrain1, pd.DataFrame({'data': value, 'seconds': datetime.now().timestamp() - self.initTime, 'date': datetime.now()}, index=[0])], ignore_index=True)
-			if i.name == self.list.currentItem().text():
+			if self.list.currentItem() and i.name == self.list.currentItem().text():
 				self.updatePlot(i)
 
 	def digestNewDataStrain2(self, data: bytes, screw: Screw):
+		print('Strain2')
 		value = conversionFromBytes(data)
 		for i in screws:
 			if i.name == screw.name:
 				i.dataStrain2 = pd.concat([i.dataStrain2, pd.DataFrame({'data': value, 'seconds': datetime.now().timestamp() - self.initTime, 'date': datetime.now()}, index=[0])], ignore_index=True)
-			if i.name == self.list.currentItem().text():
+			if self.list.currentItem() and i.name == self.list.currentItem().text():
 				self.updatePlot(i)
 
 	def digestNewDataStrain3(self, data: bytes, screw: Screw):
+		print('Strain3')
 		value = conversionFromBytes(data)
 		for i in screws:
 			if i.name == screw.name:
 				i.dataStrain3 = pd.concat([i.dataStrain3, pd.DataFrame({'data': value, 'seconds': datetime.now().timestamp() - self.initTime, 'date': datetime.now()}, index=[0])], ignore_index=True)
-			if i.name == self.list.currentItem().text():
+			if self.list.currentItem() and i.name == self.list.currentItem().text():
 				self.updatePlot(i)
 
 	def digestNewDataTemperature(self, data: bytes, screw: Screw):
+		print('Temp')
 		value = conversionFromBytes(data)
 		for i in screws:
 			if i.name == screw.name:
 				i.dataTemperature = pd.concat([i.dataTemperature, pd.DataFrame({'data': value, 'seconds': datetime.now().timestamp() - self.initTime, 'date': datetime.now()}, index=[0])], ignore_index=True)
-			if i.name == self.list.currentItem().text():
+			if self.list.currentItem() and i.name == self.list.currentItem().text():
 				self.updatePlot(i)
 
 

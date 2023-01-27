@@ -17,6 +17,8 @@ TEMP1_UUID = "0ab27c32-2a05-4af8-9716-67d05c639649"
 class QBleakClient(QObject):
 	device: BLEDevice
 	alwaysConnected: int = 0
+	reconnecting: int = 0
+	disconnecting: int = 0
 	bleakClient: BleakClient = None
 
 	messageChangedStrain1 = pyqtSignal(bytes)
@@ -52,7 +54,10 @@ class QBleakClient(QObject):
 
 	@qasync.asyncSlot()
 	async def stop(self):
-		await self.client.disconnect()
+		if self.disconnecting == 0:
+			self.disconnecting = 1
+			await self.client.disconnect()
+		self.disconnecting = 0
 		print("Device was disconnected, goodbye.")
 
 	async def build_client(self, device):
@@ -61,9 +66,12 @@ class QBleakClient(QObject):
 
 	@qasync.asyncSlot()
 	async def reconnect(self):
-		await self.bleakClient.disconnect()
-		found = await BleakScanner.find_device_by_address(self.device.address, timeout=1)
-		await self.build_client(found)
+		if self.reconnecting == 0:
+			self.reconnecting = 1
+			await self.bleakClient.disconnect()
+			found = await BleakScanner.find_device_by_address(self.device.address, timeout=1)
+			await self.build_client(found)
+		self.reconnecting = 0
 		print("Device was reconnected.")
 
 	@qasync.asyncSlot()
