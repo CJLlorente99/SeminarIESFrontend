@@ -7,7 +7,6 @@ import pyqtgraph as pg
 from addScrewWindow import AddScrewWindow
 from availableBLEWindow import AvailableBLEWindow
 import sys
-from BLEClient import QBleakClient
 import qasync
 import asyncio
 from screw import Screw
@@ -15,8 +14,9 @@ import pandas as pd
 import json
 import struct
 from datetime import datetime
-
-screws = []
+from bleak.backends.device import BLEDevice
+from bleak.backends.scanner import AdvertisementData
+from bleak import BleakScanner
 
 
 class MainWindow(QMainWindow):
@@ -25,6 +25,8 @@ class MainWindow(QMainWindow):
 		super().__init__(*args, **kwargs)
 
 		self.initTime = datetime.now().timestamp()
+		self.scanner = BleakScanner(detection_callback=self.deviceFound)
+		self.screws = {}
 
 		# Configure graphical window
 		self.window = pg.GraphicsLayoutWidget(title='M20 Screws Dashboard', show=True)
@@ -107,12 +109,16 @@ class MainWindow(QMainWindow):
 		# List of screws
 		self.numScrew = 0
 
+		# Refreshing function
+		self.timer = QTimer()
+		self.timer.setTimerType(Qt.PreciseTimer)
+		self.timer.timeout.connect(self.refreshingFunction)
+		self.timer.setInterval(50)
+		self.timer.start()
+
 	def eventFilter(self, source, event):
 		if event.type() == QEvent.ContextMenu and source is self.list:
 			menu = QMenu()
-			menu.addAction(QAction('Reconnect', menu, checkable=True))
-			menu.addAction(QAction('Disconnect', menu, checkable=True))
-			menu.addAction(QAction('AlwaysConnectedMode', menu, checkable=True))
 			menu.addAction(QAction('Remove', menu, checkable=True))
 			menu.triggered[QAction].connect(lambda i: self.contextMenuList(i, source.itemAt(event.pos()).text()))
 
@@ -122,94 +128,65 @@ class MainWindow(QMainWindow):
 		return super().eventFilter(source, event)
 
 	def contextMenuList(self, q, text):
-		if q.text() == 'Reconnect':
-			for i in screws:
-				if text == i.name:
-					i.qBleakClient.reconnect()
-			print(q.text())
-		elif q.text() == 'Disconnect':
-			for i in screws:
-				if text == i.name:
-					i.qBleakClient.stop()
-			print(q.text())
-		elif q.text() == 'AlwaysConnectedMode':
-			for i in screws:
-				if text == i.name:
-					i.qBleakClient.alwaysConnected = not i.qBleakClient.alwaysConnected
-			print(q.text())
-		elif q.text() == 'Remove':
+		if q.text() == 'Remove':
 			self.list.clear()
-			for i in screws:
-				if text == i.name:
-					i.qBleakClient.stop()
-					screws.remove(i)
+			delEntry = None
+			for i in self.screws:
+				if text == self.screws[i].name:
+					delEntry = text
 					self.numScrew -= 1
 				else:
-					self.list.addItem(i.name)
+					self.list.addItem(self.screws[i].name)
+			del self.screws[delEntry]
 
 	def addScrewOnClick(self):
 		self.windowAddScrew = AddScrewWindow()
-		self.windowAddScrew.messageNewClient.connect(self._newScrew)
+		self.windowAddScrew.messageNewClientMAC.connect(self._newScrew)
 
 	def availableBLEOnClick(self):
 		self.windowAvailableBLE = AvailableBLEWindow()
-		self.windowAvailableBLE.messageNewClient.connect(self._newScrew)
+		self.windowAvailableBLE.messageNewClientMAC.connect(self._newScrew)
 
 	def startNewRecordingOnClick(self):
-		res = pd.DataFrame()
-		item = self.list.currentItem()
+		if len(self.screws) > 0:
+			res = pd.DataFrame()
+			for screw in self.screws:
+				mac = self.screws[screw].mac
+				dfCopy = self.screws[screw].data.copy()
+				for i in dfCopy.columns:
+					dfCopy.columns[i] = mac + "_" + dfCopy.columns[i]
+				res = pd.concat([res, dfCopy], axis=1)
+				self.screws[screw].data = pd.DataFrame()
 
-		if len(screws) > 0:
-			for screw in screws:
-				name = screw.name
-				res = pd.concat([res, screw.dataStrain1], axis=1)
-				res.rename({'data': name + '_strain1', 'seconds': name + '_strain1_seconds', 'date': name + '_strain1_date'}, axis=1, inplace=True)
-				res = pd.concat([res, screw.dataStrain2], axis=1)
-				res.rename({'data': name + '_strain2', 'seconds': name + '_strain2_seconds', 'date': name + '_strain2_date'}, axis=1, inplace=True)
-				res = pd.concat([res, screw.dataStrain3], axis=1)
-				res.rename({'data': name + '_strain3', 'seconds': name + '_strain3_seconds', 'date': name + '_strain3_date'}, axis=1, inplace=True)
-				res = pd.concat([res, screw.dataTemperature], axis=1)
-				res.rename({'data': name + '_temperature', 'seconds': name + '_temperature_seconds', 'date': name + '_temperature_date'}, axis=1, inplace=True)
-				screw.dataStrain1 = pd.DataFrame()
-				screw.dataStrain2 = pd.DataFrame()
-				screw.dataStrain3 = pd.DataFrame()
-				screw.dataTemperature = pd.DataFrame()
+			res.to_csv('data.csv')
 
-				self.strain1.setData([0], [0])
-				self.strain2.setData([0], [0])
-				self.strain3.setData([0], [0])
-				self.temperature.setData([0], [0])
-		res.to_csv('data.csv')
+			item = self.list.currentItem()
+			if item:
+				for screw in self.screws:
+					if self.screws[screw].name == item.text():
+						self.updatePlot(self.screws[screw])
 
 	def exportAllOnClick(self):
-		res = pd.DataFrame()
-		for screw in screws:
-			name = screw.name
-			res = pd.concat([res, screw.dataStrain1], axis=1)
-			res.rename(
-				{'data': name + '_strain1', 'seconds': name + '_strain1_seconds', 'date': name + '_strain1_date'},
-				axis=1, inplace=True)
-			res = pd.concat([res, screw.dataStrain2], axis=1)
-			res.rename(
-				{'data': name + '_strain2', 'seconds': name + '_strain2_seconds', 'date': name + '_strain2_date'},
-				axis=1, inplace=True)
-			res = pd.concat([res, screw.dataStrain3], axis=1)
-			res.rename(
-				{'data': name + '_strain3', 'seconds': name + '_strain3_seconds', 'date': name + '_strain3_date'},
-				axis=1, inplace=True)
-			res = pd.concat([res, screw.dataTemperature], axis=1)
-			res.rename({'data': name + '_temperature', 'seconds': name + '_temperature_seconds',
-						'date': name + '_temperature_date'}, axis=1, inplace=True)
-		res.to_csv('data.csv')
-		item = self.list.currentItem()
-		for i in screws:
-			if i.name == item.text():
-				self.updatePlot(i)
+		if len(self.screws) > 0:
+			res = pd.DataFrame()
+			for screw in self.screws:
+				mac = self.screws[screw].mac
+				dfCopy = self.screws[screw].data.copy()
+				for i in dfCopy.columns:
+					dfCopy.columns[i] = mac + "_" + dfCopy.columns[i]
+				res = pd.concat([res, dfCopy], axis=1)
+
+			res.to_csv('data.csv')
+			item = self.list.currentItem()
+			if item:
+				for screw in self.screws:
+					if self.screws[screw].name == item.text():
+						self.updatePlot(self.screws[screw])
 
 	def saveBLEOnClick(self):
 		listConf = []
-		for screw in screws:
-			listConf.append(screw.qBleakClient)
+		for screw in self.screws:
+			listConf.append(screw.mac)
 		json_str = json.dumps(listConf)
 
 		with open('bleConf.json', 'w') as f:
@@ -220,67 +197,51 @@ class MainWindow(QMainWindow):
 
 	def listItemClicked(self):
 		item = self.list.currentItem()
-		for screw in screws:
-			if screw.name == item.text():
-				self.updatePlot(screw)
+		for screw in self.screws:
+			if self.screws[screw].name == item.text():
+				self.updatePlot(self.screws[screw])
 
-	def _newScrew(self, screw: QBleakClient):
-		newScrew = Screw(screw, 'Screw' + str(self.numScrew), pd.DataFrame(), pd.DataFrame(), pd.DataFrame(), pd.DataFrame())
-		screws.append(newScrew)
-		screw.messageChangedStrain1.connect(lambda i: self.digestNewDataStrain1(i, newScrew))
-		screw.messageChangedStrain2.connect(lambda i: self.digestNewDataStrain2(i, newScrew))
-		screw.messageChangedStrain3.connect(lambda i: self.digestNewDataStrain3(i, newScrew))
-		screw.messageChangedTemp1.connect(lambda i: self.digestNewDataTemperature(i, newScrew))
-		self.list.addItem(newScrew.name)
-		self.numScrew += 1
+	def _newScrew(self, screwMAC: str):
+		if screwMAC not in self.screws.keys():
+			newScrew = Screw(screwMAC, 'Screw' + str(self.numScrew), pd.DataFrame())
+			self.screws[screwMAC] = newScrew
+			self.list.addItem(newScrew.name)
+			self.numScrew += 1
 
 	def updatePlot(self, screw: Screw):
-		if len(screw.dataStrain1) != 0 and len(screw.dataStrain2) != 0 and len(screw.dataStrain3) != 0\
-				and len(screw.dataTemperature) != 0:
-			self.strain1.setData(screw.dataStrain1['seconds'].values, screw.dataStrain1['data'].values)
-			self.strain2.setData(screw.dataStrain2['seconds'].values, screw.dataStrain2['data'].values)
-			self.strain3.setData(screw.dataStrain3['seconds'].values, screw.dataStrain3['data'].values)
-			self.temperature.setData(screw.dataTemperature['seconds'].values, screw.dataTemperature['data'].values)
+		if len(screw.data) != 0:
+			self.strain1.setData(screw.data['seconds'].values, screw.data['strain1'].values)
+			self.strain2.setData(screw.data['seconds'].values, screw.data['strain2'].values)
+			self.strain3.setData(screw.data['seconds'].values, screw.data['strain3'].values)
+			self.temperature.setData(screw.data['seconds'].values, screw.data['temp'].values)
 
-	def digestNewDataStrain1(self, data: bytes, screw: Screw):
-		print('Strain1')
-		value = conversionFromBytes(data)
-		for i in screws:
-			if i.name == screw.name:
-				i.dataStrain1 = pd.concat([i.dataStrain1, pd.DataFrame({'data': value, 'seconds': datetime.now().timestamp() - self.initTime, 'date': datetime.now()}, index=[0])], ignore_index=True)
-			if self.list.currentItem() and i.name == self.list.currentItem().text():
-				self.updatePlot(i)
+	def deviceFound(self, device: BLEDevice, advertisement_data: AdvertisementData):
+		if device.address in self.screws.keys():
+			screw = self.screws[device.address]
+			try:
+				ownData = advertisement_data.manufacturer_data[0x0C3F]
+				sizeFloat = struct.calcsize('f')
+				strain1 = struct.unpack_from('f', ownData, offset=sizeFloat * 0)
+				strain2 = struct.unpack_from('f', ownData, offset=sizeFloat * 1)
+				strain3 = struct.unpack_from('f', ownData, offset=sizeFloat * 2)
+				temp = struct.unpack_from('f', ownData, offset=sizeFloat * 3)
 
-	def digestNewDataStrain2(self, data: bytes, screw: Screw):
-		print('Strain2')
-		value = conversionFromBytes(data)
-		for i in screws:
-			if i.name == screw.name:
-				i.dataStrain2 = pd.concat([i.dataStrain2, pd.DataFrame({'data': value, 'seconds': datetime.now().timestamp() - self.initTime, 'date': datetime.now()}, index=[0])], ignore_index=True)
-			if self.list.currentItem() and i.name == self.list.currentItem().text():
-				self.updatePlot(i)
+				screw.data = pd.concat([screw.data, pd.DataFrame(
+					{'strain1': strain1[0], 'strain2': strain2[0], 'strain3': strain3[0], 'temp': temp[0],
+					 'seconds': datetime.now().timestamp() - self.initTime, 'date': datetime.now()}, index=[0])],
+									   ignore_index=True)
 
-	def digestNewDataStrain3(self, data: bytes, screw: Screw):
-		print('Strain3')
-		value = conversionFromBytes(data)
-		for i in screws:
-			if i.name == screw.name:
-				i.dataStrain3 = pd.concat([i.dataStrain3, pd.DataFrame({'data': value, 'seconds': datetime.now().timestamp() - self.initTime, 'date': datetime.now()}, index=[0])], ignore_index=True)
-			if self.list.currentItem() and i.name == self.list.currentItem().text():
-				self.updatePlot(i)
+				item = self.list.currentItem()
+				if item:
+					for screw in self.screws:
+						if self.screws[screw].name == item.text():
+							self.updatePlot(self.screws[screw])
+			except KeyError:
+				pass
 
-	def digestNewDataTemperature(self, data: bytes, screw: Screw):
-		print('Temp')
-		value = conversionFromBytes(data)
-		for i in screws:
-			if i.name == screw.name:
-				i.dataTemperature = pd.concat([i.dataTemperature, pd.DataFrame({'data': value, 'seconds': datetime.now().timestamp() - self.initTime, 'date': datetime.now()}, index=[0])], ignore_index=True)
-			if self.list.currentItem() and i.name == self.list.currentItem().text():
-				self.updatePlot(i)
-
-
-def conversionFromBytes(data: bytes):
-	return struct.unpack('>f', data)[0]
+	@qasync.asyncSlot()
+	async def refreshingFunction(self):
+		await self.scanner.start()
 
 
 if __name__ == "__main__":

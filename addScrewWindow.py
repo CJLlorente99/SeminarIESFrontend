@@ -2,7 +2,6 @@ from PyQt5.QtCore import *
 from PyQt5.QtGui import *
 from PyQt5.QtWidgets import *
 import pyqtgraph as pg
-from BLEClient import QBleakClient
 from bleak.backends.device import BLEDevice
 from bleak import BleakScanner
 import qasync
@@ -10,12 +9,10 @@ from functools import cached_property
 
 
 class AddScrewWindow(QMainWindow):
-	messageNewClient = pyqtSignal(QBleakClient)
+	messageNewClientMAC = pyqtSignal(str)
 
 	def __init__(self):
 		super().__init__()
-
-		self._client = None
 
 		# Configure graphical window
 		self.window = pg.GraphicsLayoutWidget(title='Add Screw', show=True)
@@ -56,16 +53,9 @@ class AddScrewWindow(QMainWindow):
 	async def addScrewOnClick(self):
 		if self.macInput.text():
 			self.addScrewButton.setStyleSheet("background-color : red")
-			await self.build_client(await BleakScanner.find_device_by_address(self.macInput.text()))
+			self.build_client(await BleakScanner.find_device_by_address(self.macInput.text()))
 
-	@property
-	def current_client(self):
-		return self._client
-
-	async def build_client(self, device):
-		if self._client is not None:
-			await self._client.stop()
-		self._client = QBleakClient(device)
-		await self._client.start()
-		self.messageNewClient.emit(self._client)
+	def build_client(self, device):
+		if isinstance(device, BLEDevice):
+			self.messageNewClientMAC.emit(device.address)
 		self.addScrewButton.setStyleSheet("background-color : green")

@@ -5,19 +5,16 @@ from PyQt5.QtWidgets import *
 from bleak import BleakScanner
 from functools import cached_property
 from bleak.backends.device import BLEDevice
-from BLEClient import QBleakClient
 import sys
 import pyqtgraph as pg
 
 
 class AvailableBLEWindow(QMainWindow):
 
-	messageNewClient = pyqtSignal(QBleakClient)
+	messageNewClientMAC = pyqtSignal(str)
 
 	def __init__(self):
 		super().__init__()
-
-		self._client = None
 
 		# Configure graphical window
 		self.window = pg.GraphicsLayoutWidget(title='Explore BLE', show=True)
@@ -76,24 +73,12 @@ class AvailableBLEWindow(QMainWindow):
 	def devices(self):
 		return list()
 
-	@property
-	def current_client(self):
-		return self._client
-
-	async def build_client(self, device):
-		if self._client is not None:
-			await self._client.stop()
-		self._client = QBleakClient(device)
-		await self._client.start()
-		self.messageNewClient.emit(self._client)
-		self.connect_button.setStyleSheet("background-color : green")
-
-	@qasync.asyncSlot()
-	async def handle_connect(self):
+	def handle_connect(self):
 		self.connect_button.setStyleSheet("background-color : red")
 		device = self.devices_combobox.currentData()
 		if isinstance(device, BLEDevice):
-			await self.build_client(device)
+			self.messageNewClientMAC.emit(device.address)
+		self.connect_button.setStyleSheet("background-color : green")
 
 	@qasync.asyncSlot()
 	async def handle_scan(self, *args, **kwargs):
