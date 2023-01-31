@@ -17,6 +17,7 @@ from datetime import datetime
 from bleak.backends.device import BLEDevice
 from bleak.backends.scanner import AdvertisementData
 from bleak import BleakScanner
+from BLEClient import QBleakClient
 
 
 class MainWindow(QMainWindow):
@@ -203,7 +204,7 @@ class MainWindow(QMainWindow):
 
 	def _newScrew(self, screwMAC: str):
 		if screwMAC not in self.screws.keys():
-			newScrew = Screw(screwMAC, 'Screw' + str(self.numScrew), pd.DataFrame())
+			newScrew = Screw(screwMAC, 'Screw' + str(self.numScrew), pd.DataFrame(), False)
 			self.screws[screwMAC] = newScrew
 			self.list.addItem(newScrew.name)
 			self.numScrew += 1
@@ -215,33 +216,113 @@ class MainWindow(QMainWindow):
 			self.strain3.setData(screw.data['seconds'].values, screw.data['strain3'].values)
 			self.temperature.setData(screw.data['seconds'].values, screw.data['temp'].values)
 
-	def deviceFound(self, device: BLEDevice, advertisement_data: AdvertisementData):
+	@qasync.asyncSlot()
+	async def deviceFound(self, device: BLEDevice, advertisement_data: AdvertisementData):
 		if device.address in self.screws.keys():
 			screw = self.screws[device.address]
 			try:
 				ownData = advertisement_data.manufacturer_data[0x0C3F]
 				sizeFloat = struct.calcsize('f')
+				mode = struct.unpack_from('B', ownData, offset=sizeFloat * 4)
 				strain1 = struct.unpack_from('f', ownData, offset=sizeFloat * 0)
 				strain2 = struct.unpack_from('f', ownData, offset=sizeFloat * 1)
 				strain3 = struct.unpack_from('f', ownData, offset=sizeFloat * 2)
 				temp = struct.unpack_from('f', ownData, offset=sizeFloat * 3)
 
-				screw.data = pd.concat([screw.data, pd.DataFrame(
-					{'strain1': strain1[0], 'strain2': strain2[0], 'strain3': strain3[0], 'temp': temp[0],
-					 'seconds': datetime.now().timestamp() - self.initTime, 'date': datetime.now()}, index=[0])],
-									   ignore_index=True)
+				screw.dataStrain1 = pd.concat([screw.dataStrain1, pd.DataFrame(
+					{'strain1': strain1[0], 'seconds': datetime.now().timestamp() - self.initTime,
+					 'date': datetime.now()}, index=[0])], ignore_index=True)
+
+				screw.dataStrain2 = pd.concat([screw.dataStrain1, pd.DataFrame(
+					{'strain2': strain2[0], 'seconds': datetime.now().timestamp() - self.initTime,
+					 'date': datetime.now()}, index=[0])], ignore_index=True)
+
+				screw.dataStrain3 = pd.concat([screw.dataStrain1, pd.DataFrame(
+					{'strain3': strain3[0], 'seconds': datetime.now().timestamp() - self.initTime,
+					 'date': datetime.now()}, index=[0])], ignore_index=True)
+
+				screw.dataTemp1 = pd.concat([screw.dataStrain1, pd.DataFrame(
+					{'temp': temp[0], 'seconds': datetime.now().timestamp() - self.initTime,
+					 'date': datetime.now()}, index=[0])], ignore_index=True)
 
 				item = self.list.currentItem()
 				if item:
 					for screw in self.screws:
 						if self.screws[screw].name == item.text():
 							self.updatePlot(self.screws[screw])
+
 			except KeyError:
-				pass
+				# Continuous mode
+				if not screw.bleClient.connected:
+					await self.handle_connect(device.address, screw)
+
+	@qasync.asyncSlot()
+	async def handle_connect(self, address: str, screw: Screw):
+		device = await BleakScanner.find_device_by_address(address)
+		if isinstance(device, BLEDevice):
+			client = QBleakClient(device)
+			await client.start()
+			screw.bleClient = client
+			client.messageChangedStrain1.connect(lambda data: self.digestNewDataStrain1(data, screw))
+			client.messageChangedStrain2.connect(lambda data: self.digestNewDataStrain2(data, screw))
+			client.messageChangedStrain3.connect(lambda data: self.digestNewDataStrain3(data, screw))
+			client.messageChangedTemp1.connect(lambda data: self.digestNewDataTemperature(data, screw))
 
 	@qasync.asyncSlot()
 	async def refreshingFunction(self):
 		await self.scanner.start()
+
+	def digestNewDataStrain1(self, data: bytes, screw: Screw):
+		print('Strain1')
+		value = conversionFromBytes(data)
+		for mac in self.screws:
+			i = self.screws[mac]
+			if mac == screw.mac:
+				i.dataStrain1 = pd.concat([i.dataStrain1, pd.DataFrame(
+					{'strain1': value, 'seconds': datetime.now().timestamp() - self.initTime, 'date': datetime.now()},
+					index=[0])], ignore_index=True)
+			if self.list.currentItem() and i.name == self.list.currentItem().text():
+				self.updatePlot(i)
+
+	def digestNewDataStrain2(self, data: bytes, screw: Screw):
+		print('Strain2')
+		value = conversionFromBytes(data)
+		for mac in self.screws:
+			i = self.screws[mac]
+			if mac == screw.mac:
+				i.dataStrain2 = pd.concat([i.dataStrain2, pd.DataFrame(
+					{'strain2': value, 'seconds': datetime.now().timestamp() - self.initTime, 'date': datetime.now()},
+					index=[0])], ignore_index=True)
+			if self.list.currentItem() and i.name == self.list.currentItem().text():
+				self.updatePlot(i)
+
+	def digestNewDataStrain3(self, data: bytes, screw: Screw):
+		print('Strain3')
+		value = conversionFromBytes(data)
+		for mac in self.screws:
+			i = self.screws[mac]
+			if mac == screw.mac:
+				i.dataStrain3 = pd.concat([i.dataStrain3, pd.DataFrame(
+					{'strain3': value, 'seconds': datetime.now().timestamp() - self.initTime, 'date': datetime.now()},
+					index=[0])], ignore_index=True)
+			if self.list.currentItem() and i.name == self.list.currentItem().text():
+				self.updatePlot(i)
+
+	def digestNewDataTemperature(self, data: bytes, screw: Screw):
+		print('Temp')
+		value = conversionFromBytes(data)
+		for mac in self.screws:
+			i = self.screws[mac]
+			if mac == screw.mac:
+				i.dataTemperature = pd.concat([i.dataTemperature, pd.DataFrame(
+					{'temp': value, 'seconds': datetime.now().timestamp() - self.initTime, 'date': datetime.now()},
+					index=[0])], ignore_index=True)
+			if self.list.currentItem() and i.name == self.list.currentItem().text():
+				self.updatePlot(i)
+
+
+def conversionFromBytes(data: bytes):
+	return struct.unpack('<f', data)[0]
 
 
 if __name__ == "__main__":
