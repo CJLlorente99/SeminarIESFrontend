@@ -12,3 +12,4 @@ class Screw:
 	dataStrain3: pd.DataFrame
 	dataTemp1: pd.DataFrame
 	bleClient: QBleakClient = None
+	connecting: bool = False

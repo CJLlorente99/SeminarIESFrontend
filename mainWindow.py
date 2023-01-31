@@ -114,7 +114,7 @@ class MainWindow(QMainWindow):
 		self.timer = QTimer()
 		self.timer.setTimerType(Qt.PreciseTimer)
 		self.timer.timeout.connect(self.refreshingFunction)
-		self.timer.setInterval(50)
+		self.timer.setInterval(10)
 		self.timer.start()
 
 	def eventFilter(self, source, event):
@@ -204,17 +204,20 @@ class MainWindow(QMainWindow):
 
 	def _newScrew(self, screwMAC: str):
 		if screwMAC not in self.screws.keys():
-			newScrew = Screw(screwMAC, 'Screw' + str(self.numScrew), pd.DataFrame(), False)
+			newScrew = Screw(screwMAC, 'Screw' + str(self.numScrew), pd.DataFrame(), pd.DataFrame(), pd.DataFrame(), pd.DataFrame())
 			self.screws[screwMAC] = newScrew
 			self.list.addItem(newScrew.name)
 			self.numScrew += 1
 
 	def updatePlot(self, screw: Screw):
-		if len(screw.data) != 0:
-			self.strain1.setData(screw.data['seconds'].values, screw.data['strain1'].values)
-			self.strain2.setData(screw.data['seconds'].values, screw.data['strain2'].values)
-			self.strain3.setData(screw.data['seconds'].values, screw.data['strain3'].values)
-			self.temperature.setData(screw.data['seconds'].values, screw.data['temp'].values)
+		if len(screw.dataStrain1) != 0:
+			self.strain1.setData(screw.dataStrain1['seconds'].values, screw.dataStrain1['strain1'].values)
+		if len(screw.dataStrain2) != 0:
+			self.strain2.setData(screw.dataStrain2['seconds'].values, screw.dataStrain2['strain2'].values)
+		if len(screw.dataStrain3) != 0:
+			self.strain3.setData(screw.dataStrain3['seconds'].values, screw.dataStrain3['strain3'].values)
+		if len(screw.dataTemp1) != 0:
+			self.temperature.setData(screw.dataTemp1['seconds'].values, screw.dataTemp1['temp'].values)
 
 	@qasync.asyncSlot()
 	async def deviceFound(self, device: BLEDevice, advertisement_data: AdvertisementData):
@@ -222,6 +225,9 @@ class MainWindow(QMainWindow):
 			screw = self.screws[device.address]
 			try:
 				ownData = advertisement_data.manufacturer_data[0x0C3F]
+				print(f'{advertisement_data}')
+				screw.bleClient = None
+				screw.connecting = False
 				sizeFloat = struct.calcsize('f')
 				mode = struct.unpack_from('B', ownData, offset=sizeFloat * 4)
 				strain1 = struct.unpack_from('f', ownData, offset=sizeFloat * 0)
@@ -252,16 +258,23 @@ class MainWindow(QMainWindow):
 							self.updatePlot(self.screws[screw])
 
 			except KeyError:
-				# Continuous mode
-				if not screw.bleClient.connected:
-					await self.handle_connect(device.address, screw)
+				# In order to avoid some unknown errors with wrong advertisements coming from the MCU, check service uuid
+				if '68708bcb-6c81-413d-b35d-ca6cd122babf' in advertisement_data.service_uuids:
+					print(f'{advertisement_data}')
+					print(f'{not screw.bleClient} {screw.connecting}')
+					# Continuous mode (if it's first time or client is not connected yet)
+					if not screw.bleClient and not screw.connecting:
+						screw.connecting = True
+						await self.handle_connect(device.address, screw)
+					elif screw.bleClient and screw.bleClient.device.is_connected:
+						screw.connecting = False
 
 	@qasync.asyncSlot()
 	async def handle_connect(self, address: str, screw: Screw):
 		device = await BleakScanner.find_device_by_address(address)
 		if isinstance(device, BLEDevice):
 			client = QBleakClient(device)
-			await client.start()
+			await client.build_client()
 			screw.bleClient = client
 			client.messageChangedStrain1.connect(lambda data: self.digestNewDataStrain1(data, screw))
 			client.messageChangedStrain2.connect(lambda data: self.digestNewDataStrain2(data, screw))
@@ -314,7 +327,7 @@ class MainWindow(QMainWindow):
 		for mac in self.screws:
 			i = self.screws[mac]
 			if mac == screw.mac:
-				i.dataTemperature = pd.concat([i.dataTemperature, pd.DataFrame(
+				i.dataTemp1 = pd.concat([i.dataTemp1, pd.DataFrame(
 					{'temp': value, 'seconds': datetime.now().timestamp() - self.initTime, 'date': datetime.now()},
 					index=[0])], ignore_index=True)
 			if self.list.currentItem() and i.name == self.list.currentItem().text():

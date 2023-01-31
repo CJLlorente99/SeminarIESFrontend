@@ -17,7 +17,6 @@ TEMP1_UUID = "40d2b763-b3c3-472c-b82d-896bd2cff94d"
 class QBleakClient(QObject):
 	device: BLEDevice
 	bleakClient: BleakClient = None
-	connectionStatus: bool = False
 
 	messageChangedStrain1 = pyqtSignal(bytes)
 	messageChangedStrain2 = pyqtSignal(bytes)
@@ -35,36 +34,35 @@ class QBleakClient(QObject):
 
 	@qasync.asyncSlot()
 	async def start(self):
-		await self.client.connect()
-		await self.client.start_notify(STRAIN1_UUID, self._handle_read_strain1)
-		await self.client.start_notify(STRAIN2_UUID, self._handle_read_strain2)
-		await self.client.start_notify(STRAIN3_UUID, self._handle_read_strain3)
-		await self.client.start_notify(TEMP1_UUID, self._handle_read_temp1)
+		try:
+			await self.client.connect(protection_level=2)
+			await self.client.start_notify(STRAIN1_UUID, self._handle_read_strain1)
+			await self.client.start_notify(STRAIN2_UUID, self._handle_read_strain2)
+			await self.client.start_notify(STRAIN3_UUID, self._handle_read_strain3)
+			await self.client.start_notify(TEMP1_UUID, self._handle_read_temp1)
 
-		strain1 = await self.client.read_gatt_char(STRAIN1_UUID)
-		self.messageChangedStrain1.emit(bytes(strain1))
-		strain2 = await self.client.read_gatt_char(STRAIN2_UUID)
-		self.messageChangedStrain2.emit(bytes(strain2))
-		strain3 = await self.client.read_gatt_char(STRAIN3_UUID)
-		self.messageChangedStrain3.emit(bytes(strain3))
-		temp = await self.client.read_gatt_char(TEMP1_UUID)
-		self.messageChangedTemp1.emit(bytes(temp))
+			strain1 = await self.client.read_gatt_char(STRAIN1_UUID)
+			self.messageChangedStrain1.emit(bytes(strain1))
+			strain2 = await self.client.read_gatt_char(STRAIN2_UUID)
+			self.messageChangedStrain2.emit(bytes(strain2))
+			strain3 = await self.client.read_gatt_char(STRAIN3_UUID)
+			self.messageChangedStrain3.emit(bytes(strain3))
+			temp = await self.client.read_gatt_char(TEMP1_UUID)
+			self.messageChangedTemp1.emit(bytes(temp))
+		except asyncio.exceptions.CancelledError:
+			pass
 
 	@qasync.asyncSlot()
 	async def stop(self):
 		await self.client.disconnect()
-		self.connectionStatus = False
 		print("Device was disconnected, goodbye.")
 
-	async def build_client(self, device):
-		self.device = device
+	async def build_client(self):
 		await self.start()
-		self.connectionStatus = True
 
 	@qasync.asyncSlot()
 	async def _handle_disconnect(self, client: BleakClient) -> None:
 		await client.disconnect()
-		self.connectionStatus = False
 		print("Device was disconnected, goodbye.")
 		# cancelling all tasks effectively ends the program
 		for task in asyncio.all_tasks():
