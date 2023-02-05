@@ -81,7 +81,7 @@ class MainWindow(QMainWindow):
 		self.proxyList = QGraphicsProxyWidget()
 		self.list = QListWidget()
 		self.list.installEventFilter(self)
-		self.list.itemSelectionChanged.connect(self.listItemClicked)
+		# No connect function. PlotUpdate function will look at the selected item
 		self.proxyList.setWidget(self.list)
 
 		# Add all buttons to the window
@@ -110,12 +110,12 @@ class MainWindow(QMainWindow):
 		# List of screws
 		self.numScrew = 0
 
-		# Refreshing function
-		self.timer = QTimer()
-		self.timer.setTimerType(Qt.PreciseTimer)
-		self.timer.timeout.connect(self.refreshingFunction)
-		self.timer.setInterval(10)
-		self.timer.start()
+		# Data retrieval clock function
+		self.dataRetrievalTimer = QTimer()
+		self.dataRetrievalTimer.setTimerType(Qt.PreciseTimer)
+		self.dataRetrievalTimer.timeout.connect(self.dataRefreshingFunction)
+		self.dataRetrievalTimer.setInterval(10)
+		self.dataRetrievalTimer.start()
 
 	def eventFilter(self, source, event):
 		if event.type() == QEvent.ContextMenu and source is self.list:
@@ -161,12 +161,6 @@ class MainWindow(QMainWindow):
 
 			res.to_csv('data.csv')
 
-			item = self.list.currentItem()
-			if item:
-				for screw in self.screws:
-					if self.screws[screw].name == item.text():
-						self.updatePlot(self.screws[screw])
-
 	def exportAllOnClick(self):
 		if len(self.screws) > 0:
 			res = pd.DataFrame()
@@ -178,11 +172,6 @@ class MainWindow(QMainWindow):
 				res = pd.concat([res, dfCopy], axis=1)
 
 			res.to_csv('data.csv')
-			item = self.list.currentItem()
-			if item:
-				for screw in self.screws:
-					if self.screws[screw].name == item.text():
-						self.updatePlot(self.screws[screw])
 
 	def saveBLEOnClick(self):
 		listConf = []
@@ -196,12 +185,6 @@ class MainWindow(QMainWindow):
 
 		print("Save BLE configuration")
 
-	def listItemClicked(self):
-		item = self.list.currentItem()
-		for screw in self.screws:
-			if self.screws[screw].name == item.text():
-				self.updatePlot(self.screws[screw])
-
 	def _newScrew(self, screwMAC: str):
 		if screwMAC not in self.screws.keys():
 			newScrew = Screw(screwMAC, 'Screw' + str(self.numScrew), pd.DataFrame(), pd.DataFrame(), pd.DataFrame(), pd.DataFrame())
@@ -209,15 +192,23 @@ class MainWindow(QMainWindow):
 			self.list.addItem(newScrew.name)
 			self.numScrew += 1
 
-	def updatePlot(self, screw: Screw):
-		if len(screw.dataStrain1) != 0:
-			self.strain1.setData(screw.dataStrain1['seconds'].values, screw.dataStrain1['strain1'].values)
-		if len(screw.dataStrain2) != 0:
-			self.strain2.setData(screw.dataStrain2['seconds'].values, screw.dataStrain2['strain2'].values)
-		if len(screw.dataStrain3) != 0:
-			self.strain3.setData(screw.dataStrain3['seconds'].values, screw.dataStrain3['strain3'].values)
-		if len(screw.dataTemp1) != 0:
-			self.temperature.setData(screw.dataTemp1['seconds'].values, screw.dataTemp1['temp'].values)
+	def updatePlot(self):
+		item = self.list.currentItem()
+		screw = None
+		if item:
+			for screw in self.screws:
+				if self.screws[screw].name == item.text():
+					screw = self.screws[screw]
+
+		if screw:
+			if len(screw.dataStrain1) != 0:
+				self.strain1.setData(screw.dataStrain1['seconds'].values, screw.dataStrain1['strain1'].values)
+			if len(screw.dataStrain2) != 0:
+				self.strain2.setData(screw.dataStrain2['seconds'].values, screw.dataStrain2['strain2'].values)
+			if len(screw.dataStrain3) != 0:
+				self.strain3.setData(screw.dataStrain3['seconds'].values, screw.dataStrain3['strain3'].values)
+			if len(screw.dataTemp1) != 0:
+				self.temperature.setData(screw.dataTemp1['seconds'].values, screw.dataTemp1['temp'].values)
 
 	@qasync.asyncSlot()
 	async def deviceFound(self, device: BLEDevice, advertisement_data: AdvertisementData):
@@ -225,11 +216,10 @@ class MainWindow(QMainWindow):
 			screw = self.screws[device.address]
 			try:
 				ownData = advertisement_data.manufacturer_data[0x0C3F]
-				print(f'{advertisement_data}')
+				print(f'{datetime.now().timestamp()} - > {advertisement_data}')
 				screw.bleClient = None
 				screw.connecting = False
 				sizeFloat = struct.calcsize('f')
-				mode = struct.unpack_from('B', ownData, offset=sizeFloat * 4)
 				strain1 = struct.unpack_from('f', ownData, offset=sizeFloat * 0)
 				strain2 = struct.unpack_from('f', ownData, offset=sizeFloat * 1)
 				strain3 = struct.unpack_from('f', ownData, offset=sizeFloat * 2)
@@ -251,17 +241,12 @@ class MainWindow(QMainWindow):
 					{'temp': temp[0], 'seconds': datetime.now().timestamp() - self.initTime,
 					 'date': datetime.now()}, index=[0])], ignore_index=True)
 
-				item = self.list.currentItem()
-				if item:
-					for screw in self.screws:
-						if self.screws[screw].name == item.text():
-							self.updatePlot(self.screws[screw])
+				self.updatePlot()
 
 			except KeyError:
 				# In order to avoid some unknown errors with wrong advertisements coming from the MCU, check service uuid
 				if '68708bcb-6c81-413d-b35d-ca6cd122babf' in advertisement_data.service_uuids:
-					print(f'{advertisement_data}')
-					print(f'{not screw.bleClient} {screw.connecting}')
+					print(f'{datetime.now().timestamp()} - > {advertisement_data}')
 					# Continuous mode (if it's first time or client is not connected yet)
 					if not screw.bleClient and not screw.connecting:
 						screw.connecting = True
@@ -282,11 +267,13 @@ class MainWindow(QMainWindow):
 			client.messageChangedTemp1.connect(lambda data: self.digestNewDataTemperature(data, screw))
 
 	@qasync.asyncSlot()
-	async def refreshingFunction(self):
-		await self.scanner.start()
+	async def dataRefreshingFunction(self):
+		try:
+			await self.scanner.start()
+		except asyncio.CancelledError:
+			pass
 
 	def digestNewDataStrain1(self, data: bytes, screw: Screw):
-		print('Strain1')
 		value = conversionFromBytes(data)
 		for mac in self.screws:
 			i = self.screws[mac]
@@ -294,11 +281,9 @@ class MainWindow(QMainWindow):
 				i.dataStrain1 = pd.concat([i.dataStrain1, pd.DataFrame(
 					{'strain1': value, 'seconds': datetime.now().timestamp() - self.initTime, 'date': datetime.now()},
 					index=[0])], ignore_index=True)
-			if self.list.currentItem() and i.name == self.list.currentItem().text():
-				self.updatePlot(i)
+				self.updatePlot()
 
 	def digestNewDataStrain2(self, data: bytes, screw: Screw):
-		print('Strain2')
 		value = conversionFromBytes(data)
 		for mac in self.screws:
 			i = self.screws[mac]
@@ -306,11 +291,9 @@ class MainWindow(QMainWindow):
 				i.dataStrain2 = pd.concat([i.dataStrain2, pd.DataFrame(
 					{'strain2': value, 'seconds': datetime.now().timestamp() - self.initTime, 'date': datetime.now()},
 					index=[0])], ignore_index=True)
-			if self.list.currentItem() and i.name == self.list.currentItem().text():
-				self.updatePlot(i)
+				self.updatePlot()
 
 	def digestNewDataStrain3(self, data: bytes, screw: Screw):
-		print('Strain3')
 		value = conversionFromBytes(data)
 		for mac in self.screws:
 			i = self.screws[mac]
@@ -318,11 +301,9 @@ class MainWindow(QMainWindow):
 				i.dataStrain3 = pd.concat([i.dataStrain3, pd.DataFrame(
 					{'strain3': value, 'seconds': datetime.now().timestamp() - self.initTime, 'date': datetime.now()},
 					index=[0])], ignore_index=True)
-			if self.list.currentItem() and i.name == self.list.currentItem().text():
-				self.updatePlot(i)
+				self.updatePlot()
 
 	def digestNewDataTemperature(self, data: bytes, screw: Screw):
-		print('Temp')
 		value = conversionFromBytes(data)
 		for mac in self.screws:
 			i = self.screws[mac]
@@ -330,8 +311,7 @@ class MainWindow(QMainWindow):
 				i.dataTemp1 = pd.concat([i.dataTemp1, pd.DataFrame(
 					{'temp': value, 'seconds': datetime.now().timestamp() - self.initTime, 'date': datetime.now()},
 					index=[0])], ignore_index=True)
-			if self.list.currentItem() and i.name == self.list.currentItem().text():
-				self.updatePlot(i)
+				self.updatePlot()
 
 
 def conversionFromBytes(data: bytes):

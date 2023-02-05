@@ -28,9 +28,8 @@ class QBleakClient(QObject):
 
 	@cached_property
 	def client(self) -> BleakClient:
-		aux = BleakClient(self.device, disconnected_callback=self._handle_disconnect)
-		self.bleakClient = aux
-		return aux
+		self.bleakClient = BleakClient(self.device, disconnected_callback=self._handle_disconnect)
+		return self.bleakClient
 
 	@qasync.asyncSlot()
 	async def start(self):
@@ -64,9 +63,6 @@ class QBleakClient(QObject):
 	async def _handle_disconnect(self, client: BleakClient) -> None:
 		await client.disconnect()
 		print("Device was disconnected, goodbye.")
-		# cancelling all tasks effectively ends the program
-		for task in asyncio.all_tasks():
-			task.cancel()
 
 	def _handle_read_strain1(self, _: int, data: bytearray) -> None:
 		# print("received:", data)
