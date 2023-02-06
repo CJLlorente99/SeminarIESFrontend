@@ -7,9 +7,6 @@ from BLEClient import QBleakClient
 class Screw:
 	mac: str
 	name: str
-	dataStrain1: pd.DataFrame
-	dataStrain2: pd.DataFrame
-	dataStrain3: pd.DataFrame
-	dataTemp1: pd.DataFrame
+	data: pd.DataFrame
 	bleClient: QBleakClient = None
 	connecting: bool = False

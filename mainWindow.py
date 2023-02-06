@@ -18,6 +18,7 @@ from bleak.backends.device import BLEDevice
 from bleak.backends.scanner import AdvertisementData
 from bleak import BleakScanner
 from BLEClient import QBleakClient
+from mbedtls import cipher
 
 
 class MainWindow(QMainWindow):
@@ -28,6 +29,7 @@ class MainWindow(QMainWindow):
 		self.initTime = datetime.now().timestamp()
 		self.scanner = BleakScanner(detection_callback=self.deviceFound)
 		self.screws = {}
+		self.aes = cipher.AES.new(b'66556a586e32723566556a586e327235', cipher.MODE_ECB, iv=b'')
 
 		# Configure graphical window
 		self.window = pg.GraphicsLayoutWidget(title='M20 Screws Dashboard', show=True)
@@ -187,7 +189,7 @@ class MainWindow(QMainWindow):
 
 	def _newScrew(self, screwMAC: str):
 		if screwMAC not in self.screws.keys():
-			newScrew = Screw(screwMAC, 'Screw' + str(self.numScrew), pd.DataFrame(), pd.DataFrame(), pd.DataFrame(), pd.DataFrame())
+			newScrew = Screw(screwMAC, 'Screw' + str(self.numScrew), pd.DataFrame())
 			self.screws[screwMAC] = newScrew
 			self.list.addItem(newScrew.name)
 			self.numScrew += 1
@@ -201,14 +203,11 @@ class MainWindow(QMainWindow):
 					screw = self.screws[screw]
 
 		if screw:
-			if len(screw.dataStrain1) != 0:
-				self.strain1.setData(screw.dataStrain1['seconds'].values, screw.dataStrain1['strain1'].values)
-			if len(screw.dataStrain2) != 0:
-				self.strain2.setData(screw.dataStrain2['seconds'].values, screw.dataStrain2['strain2'].values)
-			if len(screw.dataStrain3) != 0:
-				self.strain3.setData(screw.dataStrain3['seconds'].values, screw.dataStrain3['strain3'].values)
-			if len(screw.dataTemp1) != 0:
-				self.temperature.setData(screw.dataTemp1['seconds'].values, screw.dataTemp1['temp'].values)
+			if len(screw.data) != 0:
+				self.strain1.setData(screw.data['seconds'].values, screw.data['strain1'].values)
+				self.strain2.setData(screw.data['seconds'].values, screw.data['strain2'].values)
+				self.strain3.setData(screw.data['seconds'].values, screw.data['strain3'].values)
+				self.temperature.setData(screw.data['seconds'].values, screw.data['temp'].values)
 
 	@qasync.asyncSlot()
 	async def deviceFound(self, device: BLEDevice, advertisement_data: AdvertisementData):
@@ -216,30 +215,15 @@ class MainWindow(QMainWindow):
 			screw = self.screws[device.address]
 			try:
 				ownData = advertisement_data.manufacturer_data[0x0C3F]
-				print(f'{datetime.now().timestamp()} - > {advertisement_data}')
+				print(f'{datetime.now().timestamp()} - > {advertisement_data} with manufacturer_data {advertisement_data.manufacturer_data}')
 				screw.bleClient = None
 				screw.connecting = False
-				sizeFloat = struct.calcsize('f')
-				strain1 = struct.unpack_from('f', ownData, offset=sizeFloat * 0)
-				strain2 = struct.unpack_from('f', ownData, offset=sizeFloat * 1)
-				strain3 = struct.unpack_from('f', ownData, offset=sizeFloat * 2)
-				temp = struct.unpack_from('f', ownData, offset=sizeFloat * 3)
+				strain1, strain2, strain3, temp = self.decryptIncomingData(ownData)
 
-				screw.dataStrain1 = pd.concat([screw.dataStrain1, pd.DataFrame(
-					{'strain1': strain1[0], 'seconds': datetime.now().timestamp() - self.initTime,
-					 'date': datetime.now()}, index=[0])], ignore_index=True)
-
-				screw.dataStrain2 = pd.concat([screw.dataStrain1, pd.DataFrame(
-					{'strain2': strain2[0], 'seconds': datetime.now().timestamp() - self.initTime,
-					 'date': datetime.now()}, index=[0])], ignore_index=True)
-
-				screw.dataStrain3 = pd.concat([screw.dataStrain1, pd.DataFrame(
-					{'strain3': strain3[0], 'seconds': datetime.now().timestamp() - self.initTime,
-					 'date': datetime.now()}, index=[0])], ignore_index=True)
-
-				screw.dataTemp1 = pd.concat([screw.dataStrain1, pd.DataFrame(
-					{'temp': temp[0], 'seconds': datetime.now().timestamp() - self.initTime,
-					 'date': datetime.now()}, index=[0])], ignore_index=True)
+				screw.data = pd.concat([screw.data, pd.DataFrame(
+					{'strain1': strain1, 'strain2': strain2, 'strain3': strain3, 'temp': temp,
+					 'seconds': datetime.now().timestamp() - self.initTime, 'date': datetime.now()},
+					index=[0])], ignore_index=True)
 
 				self.updatePlot()
 
@@ -261,10 +245,7 @@ class MainWindow(QMainWindow):
 			client = QBleakClient(device)
 			await client.build_client()
 			screw.bleClient = client
-			client.messageChangedStrain1.connect(lambda data: self.digestNewDataStrain1(data, screw))
-			client.messageChangedStrain2.connect(lambda data: self.digestNewDataStrain2(data, screw))
-			client.messageChangedStrain3.connect(lambda data: self.digestNewDataStrain3(data, screw))
-			client.messageChangedTemp1.connect(lambda data: self.digestNewDataTemperature(data, screw))
+			client.messageChangedData.connect(lambda data: self.digestNewData(data, screw))
 
 	@qasync.asyncSlot()
 	async def dataRefreshingFunction(self):
@@ -273,45 +254,31 @@ class MainWindow(QMainWindow):
 		except asyncio.CancelledError:
 			pass
 
-	def digestNewDataStrain1(self, data: bytes, screw: Screw):
-		value = conversionFromBytes(data)
+	def digestNewData(self, data: bytes, screw: Screw):
 		for mac in self.screws:
 			i = self.screws[mac]
 			if mac == screw.mac:
-				i.dataStrain1 = pd.concat([i.dataStrain1, pd.DataFrame(
-					{'strain1': value, 'seconds': datetime.now().timestamp() - self.initTime, 'date': datetime.now()},
+				strain1, strain2, strain3, temp = self.decryptIncomingData(data)
+				i.data = pd.concat([i.data, pd.DataFrame(
+					{'strain1': strain1, 'strain2': strain2, 'strain3': strain3, 'temp':temp,
+					 'seconds': datetime.now().timestamp() - self.initTime, 'date': datetime.now()},
 					index=[0])], ignore_index=True)
 				self.updatePlot()
 
-	def digestNewDataStrain2(self, data: bytes, screw: Screw):
-		value = conversionFromBytes(data)
-		for mac in self.screws:
-			i = self.screws[mac]
-			if mac == screw.mac:
-				i.dataStrain2 = pd.concat([i.dataStrain2, pd.DataFrame(
-					{'strain2': value, 'seconds': datetime.now().timestamp() - self.initTime, 'date': datetime.now()},
-					index=[0])], ignore_index=True)
-				self.updatePlot()
-
-	def digestNewDataStrain3(self, data: bytes, screw: Screw):
-		value = conversionFromBytes(data)
-		for mac in self.screws:
-			i = self.screws[mac]
-			if mac == screw.mac:
-				i.dataStrain3 = pd.concat([i.dataStrain3, pd.DataFrame(
-					{'strain3': value, 'seconds': datetime.now().timestamp() - self.initTime, 'date': datetime.now()},
-					index=[0])], ignore_index=True)
-				self.updatePlot()
-
-	def digestNewDataTemperature(self, data: bytes, screw: Screw):
-		value = conversionFromBytes(data)
-		for mac in self.screws:
-			i = self.screws[mac]
-			if mac == screw.mac:
-				i.dataTemp1 = pd.concat([i.dataTemp1, pd.DataFrame(
-					{'temp': value, 'seconds': datetime.now().timestamp() - self.initTime, 'date': datetime.now()},
-					index=[0])], ignore_index=True)
-				self.updatePlot()
+	def decryptIncomingData(self, ownData):
+		# print(f'received data {ownData.hex()}')
+		# x = b''
+		# for i in range(4):
+		# 	x = b''.join([x, ownData[i*4:(i+1)*4][::-1]])
+		# print(f'flipped data {x.hex()}')
+		# decryptedData = self.aes.decrypt(x)
+		# print(f'decrypted data {decryptedData.hex()}')
+		strain1 = struct.unpack_from('<f', ownData, 0)
+		strain2 = struct.unpack_from('<f', ownData, 4)
+		strain3 = struct.unpack_from('<f', ownData, 8)
+		temp = struct.unpack_from('<f', ownData, 12)
+		print(f'strain1 {strain1}, strain2 {strain2}, strain3 {strain3}, temp {temp}')
+		return strain1, strain2, strain3, temp
 
 
 def conversionFromBytes(data: bytes):
