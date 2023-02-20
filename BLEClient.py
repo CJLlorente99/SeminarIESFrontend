@@ -32,6 +32,7 @@ class QBleakClient(QObject):
 
 			data = await self.client.read_gatt_char(DATA_UUID)
 			self.messageChangedData.emit(bytes(data))
+
 		except asyncio.exceptions.CancelledError:
 			pass
 

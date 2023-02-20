@@ -92,12 +92,3 @@ class AvailableBLEWindow(QMainWindow):
 				self.devices_combobox.insertItem(i, device.name, device)
 		self.refresh_button.setStyleSheet("background-color : green")
 
-
-# if __name__ == "__main__":
-# 	app = QApplication(sys.argv)
-# 	loop = qasync.QEventLoop(app)
-# 	asyncio.set_event_loop(loop)
-# 	ui = AvailableBLEWindow()
-#
-# 	with loop:
-# 		loop.run_forever()

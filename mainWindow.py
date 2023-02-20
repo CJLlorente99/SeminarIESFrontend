@@ -116,10 +116,16 @@ class MainWindow(QMainWindow):
 		self.dataRetrievalTimer = QTimer()
 		self.dataRetrievalTimer.setTimerType(Qt.PreciseTimer)
 		self.dataRetrievalTimer.timeout.connect(self.dataRefreshingFunction)
-		self.dataRetrievalTimer.setInterval(10)
+		self.dataRetrievalTimer.setInterval(50)
 		self.dataRetrievalTimer.start()
 
 	def eventFilter(self, source, event):
+		"""
+		Function that rules behavior of right-click on list
+		:param source:
+		:param event:
+		:return:
+		"""
 		if event.type() == QEvent.ContextMenu and source is self.list:
 			menu = QMenu()
 			menu.addAction(QAction('Remove', menu, checkable=True))
@@ -131,6 +137,11 @@ class MainWindow(QMainWindow):
 		return super().eventFilter(source, event)
 
 	def contextMenuList(self, q, text):
+		"""
+		Function called as callback when selection in right-click menu from list is performed
+		:param q: Option that has been clicked
+		:param text: Tag of right-clicked element
+		"""
 		if q.text() == 'Remove':
 			self.list.clear()
 			delEntry = None
@@ -143,14 +154,23 @@ class MainWindow(QMainWindow):
 			del self.screws[delEntry]
 
 	def addScrewOnClick(self):
+		"""
+		Add Screw button callback
+		"""
 		self.windowAddScrew = AddScrewWindow()
 		self.windowAddScrew.messageNewClientMAC.connect(self._newScrew)
 
 	def availableBLEOnClick(self):
+		"""
+		Explore BLE button callback
+		"""
 		self.windowAvailableBLE = AvailableBLEWindow()
 		self.windowAvailableBLE.messageNewClientMAC.connect(self._newScrew)
 
 	def startNewRecordingOnClick(self):
+		"""
+		Restart button callback
+		"""
 		if len(self.screws) > 0:
 			res = pd.DataFrame()
 			for screw in self.screws:
@@ -164,6 +184,9 @@ class MainWindow(QMainWindow):
 			res.to_csv('data.csv')
 
 	def exportAllOnClick(self):
+		"""
+		Export button callback
+		"""
 		if len(self.screws) > 0:
 			res = pd.DataFrame()
 			for screw in self.screws:
@@ -176,6 +199,9 @@ class MainWindow(QMainWindow):
 			res.to_csv('data.csv')
 
 	def saveBLEOnClick(self):
+		"""
+		Save conf button callback
+		"""
 		listConf = []
 		for screw in self.screws:
 			listConf.append(screw.mac)
@@ -188,6 +214,11 @@ class MainWindow(QMainWindow):
 		print("Save BLE configuration")
 
 	def _newScrew(self, screwMAC: str):
+		"""
+		Private method used as callback when new screw is introduced through the explore ble and add screw signals
+		:param screwMAC: MAC address to be added
+		"""
+		# If not already in the list, add to it
 		if screwMAC not in self.screws.keys():
 			newScrew = Screw(screwMAC, 'Screw' + str(self.numScrew), pd.DataFrame())
 			self.screws[screwMAC] = newScrew
@@ -195,13 +226,18 @@ class MainWindow(QMainWindow):
 			self.numScrew += 1
 
 	def updatePlot(self):
+		"""
+		Function that updates the plot
+		"""
 		item = self.list.currentItem()
 		screw = None
 		if item:
+			# Search for selected screw
 			for screw in self.screws:
 				if self.screws[screw].name == item.text():
 					screw = self.screws[screw]
 
+		# If found, refresh plot
 		if screw:
 			if len(screw.data) != 0:
 				self.strain1.setData(screw.data['seconds'].values, screw.data['strain1'].values)
@@ -211,9 +247,16 @@ class MainWindow(QMainWindow):
 
 	@qasync.asyncSlot()
 	async def deviceFound(self, device: BLEDevice, advertisement_data: AdvertisementData):
+		"""
+		Scanner callback function
+		:param device:
+		:param advertisement_data: formatted advertisement_data
+		"""
+		# If MAC of received data is inside the track ones, proceed
 		if device.address in self.screws.keys():
 			screw = self.screws[device.address]
 			try:
+				# If manufacturer_data is 0x0C3F-> periodic mode, else -> continuous
 				ownData = advertisement_data.manufacturer_data[0x0C3F]
 				print(f'{datetime.now().timestamp()} - > {advertisement_data} with manufacturer_data {advertisement_data.manufacturer_data}')
 				screw.bleClient = None
@@ -240,6 +283,11 @@ class MainWindow(QMainWindow):
 
 	@qasync.asyncSlot()
 	async def handle_connect(self, address: str, screw: Screw):
+		"""
+		Function to connect and build ble client
+		:param address: MAC address
+		:param screw: Screw object
+		"""
 		device = await BleakScanner.find_device_by_address(address)
 		if isinstance(device, BLEDevice):
 			client = QBleakClient(device)
@@ -249,12 +297,20 @@ class MainWindow(QMainWindow):
 
 	@qasync.asyncSlot()
 	async def dataRefreshingFunction(self):
+		"""
+		Function to be called periodically to search for advertisement packets
+		"""
 		try:
 			await self.scanner.start()
 		except asyncio.CancelledError:
 			pass
 
 	def digestNewData(self, data: bytes, screw: Screw):
+		"""
+		Notify event callback function
+		:param data: raw data (that contains measurements)
+		:param screw: Screw object
+		"""
 		for mac in self.screws:
 			i = self.screws[mac]
 			if mac == screw.mac:
@@ -266,6 +322,14 @@ class MainWindow(QMainWindow):
 				self.updatePlot()
 
 	def decryptIncomingData(self, ownData):
+		"""
+		Function that tries to decrypt data encrypted as AES ECB
+		:param ownData: Encrypted data
+		:return: decrypted and unpacked data
+		"""
+		# TODO
+		# NOT WORKING
+
 		# print(f'received data {ownData.hex()}')
 		# x = b''
 		# for i in range(4):
@@ -279,10 +343,6 @@ class MainWindow(QMainWindow):
 		temp = struct.unpack_from('<f', ownData, 12)
 		print(f'strain1 {strain1}, strain2 {strain2}, strain3 {strain3}, temp {temp}')
 		return strain1, strain2, strain3, temp
-
-
-def conversionFromBytes(data: bytes):
-	return struct.unpack('<f', data)[0]
 
 
 if __name__ == "__main__":
